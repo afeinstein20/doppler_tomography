@@ -143,24 +143,31 @@ class RVPipeline(object):
         s_masked : np.ndarray
         o_masked : np.ndarray 
         """
-        equal_wave = np.zeros( len(w), dtype=np.ndarray )
-        equal_spec = np.zeros( len(w), dtype=np.ndarray )
-        equal_ordr = np.zeros( len(w), dtype=np.ndarray )
+        lengths = np.zeros(len(np.unique(o[0])), dtype=int)
 
         for j, uo in enumerate(np.unique(o[0])):
             temp_len = np.zeros(len(w))
-
-            # Get minimum length for given order, uo
             for i in range(len(w)):
                 temp_len[i] = len(np.where(o[i] == uo)[0])
-            length = np.nanmin(temp_len)
+            lengths[j] = np.nanmin(temp_len)
+
+        equal_wave = np.zeros( (len(w), np.nansum(lengths)), dtype=np.ndarray )
+        equal_spec = np.zeros( (len(w), np.nansum(lengths)), dtype=np.ndarray )
+        equal_ordr = np.zeros( (len(w), np.nansum(lengths)), dtype=np.ndarray )
+
+        for j, uo in enumerate(np.unique(o[0])):
+
+            if j == 0:
+                inds = [0, lengths[j]]
+            else:
+                inds = [np.nansum(lengths[:j]), np.nansum(lengths[:j+1])]
 
             # Go through each order and remove points to
             # get each spectra to the same shape post telluric masking
             for i in range(len(w)):
                 q = o[i] == uo
             
-                diff = np.abs(len(w[i][q]) - length)
+                diff = np.abs(len(w[i][q]) - lengths[j])
 
                 if diff > 0:
                     if diff == 1:
@@ -181,15 +188,10 @@ class RVPipeline(object):
                     cs = s[i][q]
                     co = o[i][q]
 
-                equal_wave[i] = np.append(equal_wave[i], cw)
-                equal_spec[i] = np.append(equal_spec[i], cs)
-                equal_ordr[i] = np.append(equal_ordr[i], co)
+                equal_wave[i][inds[0]:inds[1]] = cw
+                equal_spec[i][inds[0]:inds[1]] = cs
+                equal_ordr[i][inds[0]:inds[1]] = co
 
-                if j == 0:
-                    equal_wave[i] = np.delete(equal_wave[i], 0)
-                    equal_spec[i] = np.delete(equal_spec[i], 0)
-                    equal_ordr[i] = np.delete(equal_ordr[i], 0)
-                
         self.w_masked = equal_wave
         self.s_masked = equal_spec
         self.o_masked = equal_ordr
@@ -197,7 +199,7 @@ class RVPipeline(object):
         return 
         
         
-    def xcorrelate(self, mode='same'):
+    def xcorrelate(self, mode='same', percentile=25):
         """
         Cross-correlates each order with a template to extract RVs.
 
@@ -205,12 +207,44 @@ class RVPipeline(object):
         ----------
         mode : str, optional
              Mode to use in np.correlate.
+        percentile : float, optional
+             Percentile value to make the template from.
         
         Attributes
         ----------
         rvs : np.ndarray
         """
-    
+        
+        if type(self.w_masked) != np.ndarray:
+            return("Need to remove tellurics and clean spectra first.")
 
+        orders = np.unique(self.o_masked[0])
+
+        rvs = np.zeros( (len(orders), len(self.w_masked)) )
+
+        for j, uo in enumerate(orders):
+            peaks = np.zeros(len(self.w_masked))
+
+            for i in range(len(self.w_masked)):
+                q = self.o_masked[0] == uo
+                
+                if i == 0:
+                    template = np.percentile(self.s_masked, percentile, axis=0)[q]
+                    subwave = self.w_masked[i][q] + 0.0
+
+                corr = np.correlate(template - np.median(template),
+                                    self.s_masked[i][q] - np.median(self.s_masked[i][q]),
+                                    mode=mode)
+                c_x = np.arange(np.argmax(corr)-4, np.argmax(corr)+5, 1, dtype=int)
+                print(corr, c_x)
+                fit = np.polyfit(c_x-np.argmax(corr), corr[c_x], deg=2)
+                maximum = -fit[1]/(2*fit[0])
+                peaks[i] = maximum
+
+            
+            rv = np.nanmedian(np.diff(np.log(subwave))) * 3e8 * peaks
+            rvs[j] = rv
+            
+        self.rvs = rvs
 
 
