@@ -18,7 +18,8 @@ class DT(object):
     """
     
     def __init__(self, path, instrument='GRACES', interpolation=True, interp_factor=3,
-                 blaze_corr=False, blaze_corr_method='alphashape', useorders='all'):
+                 blaze_corr=False, blaze_corr_method='alphashape', useorders='all',
+                 template_per_night=True):
         """
 
         Parameters
@@ -37,6 +38,9 @@ class DT(object):
              Which blaze correction method to use. Default is 'alphashape'.
         useorders : np.ndarray, optional
              Which orders to use in the analysis. Default is 'all'.
+        template_per_night : bool, optional
+             Allows users to create a template per each night of observations or
+             across all observations. Default is True.
         
         Attributes
         ----------
@@ -87,7 +91,7 @@ class DT(object):
             if useorders != 'all':
                 self.remove_bad_orders(np.array(useorders))
 
-            self.create_template()
+            self.create_template(template_per_night)
 
 
     def load_files(self):
@@ -197,15 +201,60 @@ class DT(object):
         
         """
         ### HARDCODED NUMBER MAY NEED TO BE CHANGED
+        ### 1.5 corresponds to value in Marshall's code for cosmic rays
         for i in range(len(self.flux)):
             f = self.flux[i] + 0.0
             bad = np.where( (self.flux[i] < 0) | 
-                            (self.flux[i] > 2) )[0]
+                            (self.flux[i] > 1.5) )[0]
 
             self.wave[i] = np.delete(self.wave[i], bad)
             self.flux[i] = np.delete(self.flux[i], bad)
             self.flux_err[i] = np.delete(self.flux_err[i], bad)
             self.orders[i] = np.delete(self.orders[i], bad)
+
+
+    def create_template(self, template_per_night):
+        """
+        Creates a template per each order from each night.
+
+        Attributes
+        ----------
+        template_wave : np.ndarray
+        template_flux : np.ndarray
+        """
+        days = np.array(self.times.value, dtype=int)
+
+        if template_per_night == True:
+            where = np.where(np.diff(days)>=1)[0]
+            
+            if len(where) > 0:
+                per_day = np.append(where, where+1)
+                per_day = np.append(per_day, [0, len(days)-1])
+                per_day = per_day.reshape((int(len(per_day)/2),2))
+            else:
+                per_day = [np.array([0, len(days)-1])]
+
+        else:
+            per_day = [np.array([0, len(days)-1])]
+
+        template_wave = np.zeros((len(per_day), len(self.wave[0])))
+        template_flux = np.zeros((len(per_day), len(self.flux[0])))
+        template_flux_err = np.zeros((len(per_day), len(self.flux_err[0])))
+        template_orders = np.zeros((len(per_day), len(self.orders[0])))
+
+        for i, pair in enumerate(per_day):
+            inds = np.arange(pair[0], pair[1]+1, 1, dtype=int)
+            template_wave[i] = np.nanmean(self.wave[inds], axis=0)
+            template_flux[i] = np.nanmedian(self.flux[inds], axis=0)
+            template_flux_err[i] = np.sqrt( np.nansum( self.flux_err[inds]**2))/len(inds)
+            template_orders[i] = np.nanmedian(self.orders[inds])
+
+        self.template_wave = template_wave
+        self.template_flux = template_flux
+        self.template_flux_err = template_flux_err
+        self.template_orders = template_orders
+            
+
 
 
     def load_lines(self, filename, path=None, indices=[0,1],
