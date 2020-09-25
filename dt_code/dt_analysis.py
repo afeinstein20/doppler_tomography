@@ -52,6 +52,8 @@ class DT(object):
         """
         
         self.instrument = instrument
+        self.lines_wave = None
+        self.template_wave = None
 
         if path == None:
             print('Please input directory where files are located.')
@@ -90,8 +92,6 @@ class DT(object):
 
             if useorders != 'all':
                 self.remove_bad_orders(np.array(useorders))
-
-#            self.create_template(template_per_night)
 
 
     def load_files(self):
@@ -345,7 +345,6 @@ class DT(object):
 
 
         ## THIS NEEDS TO BE TESTED FOR MULTI-DAY DATA SETS :D
-
         self.template_wave = template_wave
         self.template_flux = template_flux
         self.template_flux_err = template_flux_err
@@ -388,6 +387,52 @@ class DT(object):
         
         self.lines_wave = (data[:,indices[0]]*units).to(self.wave_unit)
         self.lines_depth = data[:,indices[1]]
+
+
+    def extract_line_profiles(self):
+        """
+        Used to fit the lines! (Feels self-explanatory.) Basically
+        calls a bunch of other functions.
+        """
+        if self.template_wave is None:
+            print("A template needs to be created through DT.create_template()")
+            return
+        
+        elif self.lines_wave is None:
+            print("A file of specific lines needs to be read in through DT.load_lines()")
+            return
+
+        else:
+            self.velocity_shift()
+            self.depth_adjustment()
+            self.line_shape()
+
+    
+    def velocity_shift(self):
+        """
+        The velocity offset between the model and spectrum
+        is a free parameter. This is then subtracted off to put
+        the spectra in the stellar rest frame.
+        """
+        return
+
+
+    def depth_adjustment(self):
+        """
+        The depths of each spectral line is the free parameter,
+        to compute an optimal model spectrum.
+        """
+        return
+    
+
+    def line_shape(self):
+        """
+        The velocity offset & line depth are fixed. The value of
+        each pixel in the model line profile is the free parameter
+        (i.e. fitting the shape of each line).
+        """
+        return
+
 
 
     def profile_constants(self, v, epsilon, vsini):
