@@ -388,11 +388,24 @@ class DT(object):
         self.lines_wave = (data[:,indices[0]]*units).to(self.wave_unit)
         self.lines_depth = data[:,indices[1]]
 
+        # Gets lines in our wavelength region
+        ind = np.where( (self.lines_wave >= np.nanmin(self.wave[0])) &
+                        (self.lines_wave <= np.nanmax(self.wave[0])) )[0]
 
-    def extract_line_profiles(self):
+        self.lines_wave = self.lines_wave[ind]
+        self.lines_depth = self.lines_depth[ind]
+
+    def extract_line_profiles(self, vsini, vsini_units=u.km/u.s):
         """
         Used to fit the lines! (Feels self-explanatory.) Basically
         calls a bunch of other functions.
+
+        Parameters
+        ----------
+        vsini : float
+             v*sin(i) of the star.
+        vsini_units : astropy.units, optional
+             Units of v*sin(i). Default is km/s.
         """
         if self.template_wave is None:
             print("A template needs to be created through DT.create_template()")
