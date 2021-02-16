@@ -1,13 +1,22 @@
 import os
 import numpy as np
+from tqdm import tqdm
+import ccdproc as ccdp
+from math import log10
 from astropy import units
 from astropy.io import fits
 from astropy.time import Time
 from astropy.table import Table
+from astropy.nddata import CCDData
 from astroquery.simbad import Simbad
 from astropy.coordinates import SkyCoord
+from scipy.ndimage.filters import percentile_filter
 
-from .observatories import Observatories
+from .observatories import *
+from .instruments import *
+
+import warnings
+warnings.filterwarnings("ignore")
 
 __all__ = ['DopplerTomography']
 
@@ -19,6 +28,7 @@ class DopplerTomography(object):
 
     def __init__(self, fn_dir, dattype_keyword='OBSTYPE', 
                  time_keyword='MJDATE', time_format='mjd',
+                 observatory='keck',
                  reload=False):
         """
 
@@ -59,7 +69,7 @@ class DopplerTomography(object):
 
         else:
             self.npy_files = np.sort([os.path.join(self.fn_dir, i) for i in
-                                      os.listdir(self.fn_dir)])
+                                      os.listdir(self.fn_dir) if i.endswith('.npy')])
             self.reload_master_frames() 
 
             
@@ -69,7 +79,8 @@ class DopplerTomography(object):
     def resave(self, dattype_keyword, time_keyword, time_format):
         """
         Resaves FITS files into .npy files
-        and extracts observation times.
+        and extracts observation times. Cosmic rays are
+        removed from science frames.
 
         Parameters
         ----------
@@ -100,7 +111,7 @@ class DopplerTomography(object):
             npy_files = np.array([], dtype='U100')
             times = np.array([])
             
-            for fn in files:
+            for fn in tqdm(files):
                 name = fn.split('.')[0]
                 
                 hdu = fits.open(fn)
@@ -108,11 +119,18 @@ class DopplerTomography(object):
 
                 newname = '{0}_{1}.npy'.format(name, dattype)
                 npy_files = np.append(npy_files, newname)
-                
-                np.save(newname, hdu[0].data)
 
                 if dattype == 'OBJECT':
                     times = np.append(times, hdu[0].header[time_keyword])
+                    
+                    ## Removes cosmic rays
+                    ccd = CCDData(hdu[0].data, unit='electron')
+                    ccd_removed = ccdp.cosmicray_lacosmic(ccd,
+                                                          sigclip=3.0)
+                    np.save(newname, ccd_removed.data+0.0)
+
+                else:
+                    np.save(newname, hdu[0].data)
 
             self.times = Time(times, format=time_format).jd
             np.save(os.path.join(self.fn_dir, 'jd_times.npy'), self.times)
@@ -184,7 +202,6 @@ class DopplerTomography(object):
 
         for i in range(len(subfiles)):
             dat = np.load(subfiles[i])
-            
             if i == 0:
                 science_frames = np.zeros((len(subfiles),
                                            dat.shape[0],
@@ -230,4 +247,133 @@ class DopplerTomography(object):
             barycorr[i] = coords.radial_velocity_correction('heliocentric',
                                                             obstime=self.times[i],
                                                             location=obs.geodetic).to(units.km/units.s).value
-        self.barycorr = barycorr
+        self.barycorr = barycorr * units.km / units.s
+        return
+
+
+    def pipeline_reference(self, ref_file, instrument='GRACES'):
+        """
+        Uses wavelength and order solution provided
+        by an instrument's analysis pipeline.
+
+        Parameters
+        ----------
+        ref_file : str
+           The path + name of the reference file.
+        instrument : str, optional
+           The name of the instrument. Default is 'GRACES'.
+
+        Attributes
+        ----------
+        wavelength_ref : np.ndarray
+           Array of wavelengths to use as a reference.
+        orders_ref : np.ndarray
+           Array of order numbers to use as a reference.
+        order_start : int
+           The starting order for wavelength extraction.
+        discrete_model : np.ndarray
+           The discrete values to extract orders.
+        """
+        inst = Instruments(instrument, ref_file)
+
+        keys = list(inst.__dict__.keys())
+        for key in keys:
+            setattr(self, key, getattr(inst, key))
+        return
+
+    
+    def extract_data(self, cutends=350, percentile=95, size=150, deg=8,
+                     interpolate=True, interp_factor=3):
+        """
+        Extracts the spectra per order in each file. 
+
+        Parameters
+        ----------
+        cutends : int, optional
+           The number of indices to cut from the both
+           ends of each order. Default is 350.
+        interp_factor : int, optional
+           The factor to interpolate the wavelength
+           and spectrum grid over. Default is 3.
+
+        Attributes
+        ----------
+        wavelengths : np.ndarray
+        spectra : np.ndarray
+        corrected_spectra : np.ndarray
+           Blaze corrected spectra.
+        orders : np.ndarray
+        """
+        c = 2.998 * units.m / units.s # speed of light
+
+        fluxes = np.zeros((len(self.times),
+                           self.discrete_model.shape[0]-1,
+                           self.discrete_model.shape[1]))
+
+        for i in tqdm(range(len(self.times))):
+            dopshift = ((self.wavelength_ref * self.barycorr[i]) / c).to(units.nm)
+            wavelength = (self.wavelength_ref - dopshift).to(units.nm).value
+            data = self.science_frames[i] + 0.0
+
+            for j in range(self.discrete_model.shape[0]-1):
+                order = self.order_start + j
+                
+                top = self.discrete_model[j] + 0
+                avg_height = np.nanmedian(np.abs(self.discrete_model[j+1] -
+                                                 self.discrete_model[j]))
+                bottom = np.array(top + avg_height, dtype=int)
+
+                for k in range(top.shape[0]):
+                    fluxes[i][j][k] = np.nansum(data[k, top[k]:bottom[k]])
+
+                if i == 0 and j == 0:
+                    wavelengths = np.zeros((len(self.times),
+                                            self.discrete_model.shape[0]-1,
+                                            len(fluxes[i][j])))
+                    orders = np.zeros((len(self.times),
+                                       self.discrete_model.shape[0]-1,
+                                       len(fluxes[i][j])-2*cutends))
+                    corrected_wavelengths = np.zeros((len(self.times),
+                                               self.discrete_model.shape[0]-1,
+                                               len(fluxes[i][j])-2*cutends))
+                    corrected_flux = np.zeros((len(self.times),
+                                               self.discrete_model.shape[0]-1,
+                                               len(fluxes[i][j])-2*cutends))
+                    
+
+                # Interpolating wavelengths
+                wave = self.wavelength_ref[self.orders_ref==order].value
+                newwaves = np.logspace(log10(wave[0]), log10(wave[-1]),
+                                       len(fluxes[i][j]), base=10.0)
+
+                # Fit and remove blaze function
+                filt = percentile_filter(fluxes[i][j][cutends:-cutends],
+                                         percentile=percentile,
+                                         size=size)
+                fit = np.polyfit(newwaves[cutends:-cutends], filt, deg=deg)
+                model = np.poly1d(fit)
+
+                corrected_flux[i][j] = (fluxes[i][j][cutends:-cutends] / 
+                                        model(newwaves[cutends:-cutends]))
+                wavelengths[i][j] = newwaves
+                corrected_wavelengths[i][j] = newwaves[cutends:-cutends]
+                orders[i][j] = np.full(len(newwaves[cutends:-cutends]), order)
+
+        if interpolate:
+            interp_waves = np.zeros( (wavelengths.shape[0],
+                                      wavelengths.shape[1],
+                                      wavelengths.shape[2]*interp_factor) )
+            interp_spect = np.zeros( (wavelengths.shape[0],
+                                      wavelengths.shape[1],
+                                      wavelengths.shape[2]*interp_factor) )
+            interp_ordrs = np.zeros( (wavelengths.shape[0],
+                                      wavelengths.shape[1],
+                                      wavelengths.shape[2]*interp_factor) )
+
+            
+        self.wavelengths = wavelengths + 0.0
+        self.spectra = fluxes + 0.0
+        self.corrected_spectra = corrected_flux + 0.0
+        self.corrected_wavelengths = corrected_wavelengths + 0.0
+        self.orders = orders + 0
+
