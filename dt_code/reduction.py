@@ -18,12 +18,12 @@ from .instruments import *
 import warnings
 warnings.filterwarnings("ignore")
 
-__all__ = ['DopplerTomography']
+__all__ = ['SpectraReduction']
 
-class DopplerTomography(object):
+class SpectraReduction(object):
     """
-    A tested approach for Doppler Tomography analysis
-    of young, active stars with GRACES data.
+    Reducing spectra via box extraction for different
+    telescope + instrument setups.
     """
 
     def __init__(self, fn_dir, dattype_keyword='OBSTYPE', 
