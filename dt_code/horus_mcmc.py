@@ -109,7 +109,7 @@ class LineProfileMCMC(object):
             params.limb_dark = "quadratic"    #limb darkening model
             params.u = [vals[7], vals[8]]     #limb darkening coefficients [u1, u2, u3, u4]
             
-            m = batman.TransitModel(params, time)    #initializes model
+            m = batman.TransitModel(params, self.times)    #initializes model
             lc = m.light_curve(params)
 
             tphase = np.zeros(len(lc))
@@ -121,16 +121,31 @@ class LineProfileMCMC(object):
             return
             
             
+        def build_pickle(self, mask): 
+            """
+            Build the data dictionary needed for horus.py.
+            
+            Parameters
+            ----------
+            mask : np.ndarray
+               Mask used on the velocity/spectra arrays.
 
-        def build_pickle(self): #ttime, texptime, vabsfine, profarr, profarrerr, whichplanet):
+            Returns
+            -------
+            dic : dictionary
+            """
+            if mask is None:
+                mask = np.arange(0, len(self.velocities), 1, dtype=int)
+
             dic = {'ttime':self.times,
                    'texptime':self.exptime,
-                   'vabsfine':vabsfine,
-                   'profarr':profarr,
-                   'avgprof':np.nanmedian(profarr, axis=0),
-                   'profarrerr':profarrerr,
-                   'avgproferr':np.nanmedian(profarrerr, axis=0),
+                   'vabsfine':vabsfine[mask],
+                   'profarr':profarr[mask],
+                   'avgprof':np.nanmedian(profarr, axis=0)[mask],
+                   'profarrerr':profarrerr[mask],
+                   'avgproferr':np.nanmedian(profarrerr, axis=0)[mask],
                    'whichplanet':whichplanet}
+
             return dic
 
 
@@ -161,61 +176,110 @@ class LineProfileMCMC(object):
                            'width': params[10]}
             return horus_struc
 
-        def upside_down_gauss(x, mu, sig, f):
+        def upside_down_gauss(self, x, mu, sig, f):
+            """
+            Creates an upside-down Gaussian to fit for line cores. 
+
+            Parameters
+            ----------
+            x : np.ndarray
+               Array of velocities to evaluate the Gaussian over.
+            mu : float
+               Mean of the Gaussian.
+            sig : float
+               Standard deviation of the Gaussian.
+            f : float
+               Factor by which to scale the Gaussian.
+
+            Returns
+            -------
+            model : np.ndarray
+               Gaussian model.
+            """
             term1 = f / (sig * np.sqrt(2 * np.pi))
             e = -0.5 * (x - mu)**2 / sig**2
             return -term1 * np.exp(e)
 
-        def build_horus_model(hdict, params, x, offset=0, corescaling=0):
+        def build_horus_model(self, hdict, params, x, linetype, symmetric=True):
+            """
+            Calls horus.py and builds the line profile to fit the data to.
+
+            Parameters
+            ----------
+            hdict : dictionary
+               Dictionary format to feed into the horus.py script.
+            params : np.ndarray
+               Array of parameters to fit in the line profile.
+            x : np.ndarray
+               Array of velocities to evaluate the line profile over.
+            linetype : str
+               Type of line to fit. Options are 'core' and 'line'.
+            symmetric : bool, optional
+               If linetype == 'core', this key tells if the Gaussian should
+               be symmetric about the core or offset. Default is True.               
+            """
             new_out = horus.model(hdict, resnum=50, convol='y', 
-                                  add_poly=False)#,
+                                  add_poly=False)
                 
             # mu, std, factor
-            if len(params) < 18:
-                model = upside_down_gauss(x, -params[11],
-                                          params[14], 
-                                          params[15])+params[13]
-            else:
-                model = upside_down_gauss(x, -params[17],
-                                          params[14], 
-                                          params[15])+params[13]
+            if linetype == 'core':
+                if symmetric == True:
+                    model = self.upside_down_gauss(x, -params[11],
+                                                   params[14], 
+                                                   params[15])+params[13]
+                else:
+                    model = self.upside_down_gauss(x, -params[17],
+                                                   params[14], 
+                                                   params[15])+params[13]
         
-            return model + new_out['profarr'][0]*params[16]
+            else:
+                model = np.zeros(len(new_out['profarr'][0]))+params[13]
 
 
-        def log_prior(params):
+            return model + new_out['profarr'][0]*params[14]
+
+
+        def log_prior(self, params, bounds, linetype, symmetric):
+            """
+            Prior function
+            """
+                                     
             if params[5] < 0:
                 return -np.inf
             else:
                 e = np.sqrt(params[5]) * np.sin(params[6])
                 o = np.sqrt(params[5]) * np.cos(params[6])
                 
-                if params[8] < 0 or params[8] > 1:
+                if params[8] < 0 or params[8] > 1: #u1
                     return -np.inf
-                if params[9] < 0 or params[9] > 1:
+                if params[9] < 0 or params[9] > 1: # u2
                     return -np.inf    
-                if params[2] < -100.0 or params[2] > 100.0:
+                if params[2] < -100.0 or params[2] > 100.0: # obliquity
                     return -np.inf
-                if e < 0.0 or e > 0.5:
+                if e < 0.0 or e > 0.5: #eccentricity
                     return -np.inf
-                if o < -np.pi or o > np.pi:
+                if o < -np.pi or o > np.pi: #omega
                     return -np.inf
-                if params[14] < 35.0 or params[14] > 60.0:
+                if params[13] < 0 or params[13] > 3.0: #y-offset 
                     return -np.inf
-                if params[13] < 0.5 or params[13] > 1.5:
+                if params[14] <= 0.0 or params[14] > 1.0: #core scaling
                     return -np.inf
-                if params[15] < 10.0 or params[15] > 50.0:
+                if params[11] < -10.0 or params[11] > 10.0: #line center
                     return -np.inf
-                if params[16] <= 0.0 or params[16] > 1.0:
+                if params[10] < 0.0 or params[10] > 1.0: 
                     return -np.inf
-                if params[11] < -10.0 or params[11] > 10.0:
+            
+            if linetype=='core':
+                if params[15] < 35.0 or params[15] > 60.0: #gauss std
                     return -np.inf
-                if params[10] < 0.0 or params[10] > 1.0:
+                if params[16] < 10.0 or params[16] > 50.0: #gauss scale factor
                     return -np.inf
                 
-            if len(params)>17 and (params[17] < -20.0 or params[17] > 20.0):
-                return -np.inf
+                if symmetric==False:
+                    if params[17] < -20.0 or params[17] > 20.0: #gauss mean
+                        return -np.inf
 
+            # visini, period, b, rp/rstar, a/rstar, T0
             g_inds = [0, 1, 3, 4, 7, 12]
             means = [23.0, 8.24958, 0.200060, 0.039208, 13.19, 58846.097156]
             stds = [1.0, 1e-5, 0.05, 1e-5, 0.01, 1e-5]
@@ -228,39 +292,81 @@ class LineProfileMCMC(object):
             return tracker
 
 
-        def lnlike(params, velocity, profile, error, data):
-            lp = log_prior(params)
+        def lnlike(self, params, bounds, data, linetype, symmetric):
+            """ Log-likelihood function """
+            lp = self.log_prior(params, bounds, linetype, symmetric)
             
             if not np.isfinite(lp):
                 return -np.inf
             else:
-                hdict = build_struct(data, params)
-                model = build_horus_model(hdict, params, data['vabsfine'])
+                hdict = self.build_struct(data, params)
+                model = self.build_horus_model(hdict, params, data['vabsfine'])
                 
                 lnl = np.nansum( (profile-model)**2 / error**2 )
                 return -0.5 * lnl
 
 
-parser=argparse.ArgumentParser()
-parser.add_argument("infile", type=str, help="name of the input file")
-parser.add_argument("walkers", type=int, help="number of walkers")
-parser.add_argument("steps", type=int, help="number of steps")
-parser.add_argument("key", type=int, help="output file key")
 
-args=parser.parse_args()
+        def run_mcmc(self, nwalkers, nsteps, init_guess, 
+                     bounds, output_key, linetype='core', symmetric=True, 
+                     mask=None):
+            """
 
+            Parameters
+            ----------
+            nwalkers : int
+               Number of walkers for the MCMC.
+            nsteps : int
+               Number of steps for the MCMC.
+            init_guess : np.ndarray
+               Initial guess of model parameters.
+            bounds : np.ndarray
+               Bounds within to accept each parameter. Needs to be of
+               shape (len(init_guess), 2) where each entry is the pair
+               of lower and upper bounds for uniform priors and the 
+               (mean, std) for Gaussian priors.
+            output_key : str
+               Key to add to saved output file.
+            linestype : str, optional
+               Tells the type of line to fit. Default is 'core'. 
+               Other optionl is 'line'. The difference is when set
+               to 'core' an upside down Gaussian is added to the
+               profile to better fit the profile.
+            symmetric : bool, optional
+               Tells if the underlying Gaussian around a line core 
+               should be symmetrical or not. Default is True.
+            mask : np.ndarray, optional
+               An array to mask the data on. Default is None.
+            """
+            new_dict = self.build_pickle(mask=mask)
+            
+            hdict = self.build_struct(new_dict, starters)
+            model = self.build_horus_model(hdict, starters, new_dict['vabsfine'])
 
+            np.random.seed(321)
 
-data = np.load(args.infile, allow_pickle=True)
+            pos = np.zeros((nwalkers, len(init_guess)))
+            for i in range(len(init_guess)):
+                pos[:,i] = np.random.uniform(init_guess[i]-bounds[i]/10.0,
+                                             init_guess[i]+bounds[i]/10.0, nwalkers)
 
-q = ((data['vabsfine'][1:] > -100) & (data['vabsfine'][1:]<90))
+            nwalkers, ndim = pos.shape
 
-new_dict = build_pickle(data['ttime'], data['texptime'],
-                        data['vabsfine'][1:][q],
-                        data['profarr'][:,q],
-                        data['profarrerr'][:,1:][:,q],
-                        1)
+            sampler = emcee.EnsembleSampler(nwalkers, ndim, self.lnlike, args=(bounds,
+                                                                               new_dict,
+                                                                               linetype,
+                                                                               symmetric))
+            mcmc_output = sampler.run_mcmc(pos, nsteps, progress=True)
+            self.sampler = mcmc_output
+            self.chains = sampler.get_chain()
+            self.accp_frac = sampler.acceptance_fraction
+            self.lnprob = sampler.lnprobability
 
+            np.save('samples_{}.npy'.format(output_key), sampler.get_chain())
+            np.save('accp_frac_{}.npy'.format(output_key), sampler.acceptance_fraction)
+            np.save('lnprob_{}.npy'.format(output_key), sampler.lnprobability)
+        
+"""
 if key == 'caII':
     starters = [23.0, 8.24958, 5.0, 0.200060, 0.039208, 0.1, 0.0, 13.19, 0.37, 0.3, 0.3, 
                 4.0, 58846.097156, 0.97, 45.0, 33.0, 0.275]
@@ -277,28 +383,4 @@ elif key == 'caIII':
     limits = [5.0, 1e-5, 3.0, 0.05, 1e-5, 0.01, 5.0, 0.01, 0.1, 0.1, 0.1, 
               0.1, 1e-5, 0.2, 10.0, 10.0, 0.2, 0.1]
 
-
-hdict = build_struct(new_dict, starters)
-model = build_horus_model(hdict, starters, new_dict['vabsfine'])
-
-np.random.seed(321)
-walkers = args.walkers
-
-pos = np.zeros((walkers, len(starters)))
-for i in range(len(starters)):
-    pos[:,i] = np.random.uniform(starters[i]-limits[i]/10.0, 
-                                 starters[i]+limits[i]/10.0, walkers)
-
-nwalkers, ndim = pos.shape
-
-sampler = emcee.EnsembleSampler(nwalkers, ndim, lnlike, args=(new_dict['vabsfine'],
-                                                              new_dict['avgprof'],
-                                                              new_dict['avgproferr'],
-                                                              new_dict))
-
-mcmc_output = sampler.run_mcmc(pos, args.steps, progress=True)
-
-
-np.save('samples_{}.npy'.format(args.key), sampler.get_chain())
-np.save('accp_frac_{}.npy'.format(args.key), sampler.acceptance_fraction)
-np.save('lnprob_{}.npy'.format(args.key), sampler.lnprobabiility)
+"""
