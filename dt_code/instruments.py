@@ -50,4 +50,9 @@ class Instruments(object):
         self.order_start = 23
         self.discrete_model = np.load('graces_discrete_models.npy')
 
+        self.time_key = 'MJDATE'
+        self.exptime_key = 'EXPTIME'
+        self.time_fmt = 'mjd'
+        self.dattype_key = 'OBSTYPE'
+
         return

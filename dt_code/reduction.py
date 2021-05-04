@@ -26,9 +26,8 @@ class SpectraReduction(object):
     telescope + instrument setups.
     """
 
-    def __init__(self, fn_dir, dattype_keyword='OBSTYPE', 
-                 time_keyword='MJDATE', time_format='mjd',
-                 observatory='keck',
+    def __init__(self, fn_dir, ref_file, 
+                 observatory='keck', instrument='graces',
                  reload=False):
         """
 
@@ -36,15 +35,10 @@ class SpectraReduction(object):
         ----------
         fn_dir : path
            The directory where all raw data files are stored.
-        dattype_keyword : str, optional                
-           Header keyword for the observation type.
-           Default is 'OBSTYPE'.  
-        time_keyword : str, optional              
-           Header keyword for the time of observation.
-           Default is 'MJDATE'.   
-        time_format : str, optional
-           Header time format. Default is 'mjd'. Options
-           can be found in astropy.time.Time objects.   
+        ref_file : path
+           Reference FITS file for grabbing some header information.
+        observatory : str
+        instrument : str
         reload : bool, optional
 
         Attributes
@@ -56,9 +50,10 @@ class SpectraReduction(object):
         """
 
         self.fn_dir = fn_dir
+        self.instrument = self.pipeline_reference(instrument, ref_file)
 
         if reload == False:
-            self.resave(dattype_keyword, time_keyword, time_format)
+            self.resave(self.dattype_key, self.time_key, self.time_fmt)
             self.med_dark = self.create_master_files(np.sort([i for i in self.npy_files if
                                                               i.endswith('_BIAS.npy')]))
             np.save(os.path.join(self.fn_dir, 'master_dark.npy'), self.med_dark)
@@ -70,30 +65,17 @@ class SpectraReduction(object):
         else:
             self.npy_files = np.sort([os.path.join(self.fn_dir, i) for i in
                                       os.listdir(self.fn_dir) if i.endswith('.npy')])
+
             self.reload_master_frames() 
 
-            
         self.science_frames = self.load_science_frames()
 
 
-    def resave(self, dattype_keyword, time_keyword, time_format):
+    def resave(self):
         """
         Resaves FITS files into .npy files
         and extracts observation times. Cosmic rays are
         removed from science frames.
-
-        Parameters
-        ----------
-        dattype_keyword : str
-           Header keyword for the observation type.
-           Default is 'OBSTYPE'.
-        time_keyword : str
-           Header keyword for the time of observation.
-           Default is 'MJDATE'.
-        time_format : str
-           Header time format. Default is 'mjd'. Options
-           can be found in astropy.time.Time objects.
-
 
         Attributes
         ----------
@@ -110,19 +92,21 @@ class SpectraReduction(object):
             
             npy_files = np.array([], dtype='U100')
             times = np.array([])
+            exptimes = np.array([])
             
             for fn in tqdm(files):
                 name = fn.split('.')[0]
                 
                 hdu = fits.open(fn)
-                dattype = hdu[0].header[dattype_keyword]
+                dattype = hdu[0].header[self.dattype_key]
 
                 newname = '{0}_{1}.npy'.format(name, dattype)
                 npy_files = np.append(npy_files, newname)
 
                 if dattype == 'OBJECT':
-                    times = np.append(times, hdu[0].header[time_keyword])
-                    
+                    times = np.append(times, hdu[0].header[self.time_key])
+                    exptimes = np.append(exptimes, hdu[0].header[self.exptime_key])
+
                     ## Removes cosmic rays
                     ccd = CCDData(hdu[0].data, unit='electron')
                     ccd_removed = ccdp.cosmicray_lacosmic(ccd,
@@ -132,8 +116,9 @@ class SpectraReduction(object):
                 else:
                     np.save(newname, hdu[0].data)
 
-            self.times = Time(times, format=time_format).jd
-            np.save(os.path.join(self.fn_dir, 'jd_times.npy'), self.times)
+            self.times = Time(times, format=self.time_fmt)
+            self.exptimes = exptimes
+            np.save(os.path.join(self.fn_dir, 'times.npy'), self.times)
 
             self.npy_files = npy_files
             return
@@ -251,7 +236,7 @@ class SpectraReduction(object):
         return
 
 
-    def pipeline_reference(self, ref_file, instrument='GRACES'):
+    def pipeline_reference(self, instrument, ref_file):
         """
         Uses wavelength and order solution provided
         by an instrument's analysis pipeline.

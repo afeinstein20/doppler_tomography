@@ -1,6 +1,5 @@
 import os
 import sys
-import horus
 import emcee
 import pickle
 import corner
@@ -11,6 +10,7 @@ import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings("ignore")
 
+from .horus import *
 
 __all__ = ['LineProfileMCMC']
 
@@ -218,7 +218,7 @@ class LineProfileMCMC(object):
                If linetype == 'core', this key tells if the Gaussian should
                be symmetric about the core or offset. Default is True.               
             """
-            new_out = horus.model(hdict, resnum=50, convol='y', 
+            new_out = HorusModel(hdict, resnum=50, convol='y', 
                                   add_poly=False)
                 
             # mu, std, factor
@@ -250,39 +250,43 @@ class LineProfileMCMC(object):
                 e = np.sqrt(params[5]) * np.sin(params[6])
                 o = np.sqrt(params[5]) * np.cos(params[6])
                 
-                if params[8] < 0 or params[8] > 1: #u1
+                if params[8] < bounds[8][0] or params[8] > bounds[8][1]: #u1
                     return -np.inf
-                if params[9] < 0 or params[9] > 1: # u2
+                if params[9] < bounds[9][0] or params[9] > bounds[9][1]: # u2
                     return -np.inf    
-                if params[2] < -100.0 or params[2] > 100.0: # obliquity
+                if params[2] < bounds[2][0] or params[2] > bounds[2][1]: # obliquity
                     return -np.inf
                 if e < 0.0 or e > 0.5: #eccentricity
                     return -np.inf
                 if o < -np.pi or o > np.pi: #omega
                     return -np.inf
-                if params[13] < 0 or params[13] > 3.0: #y-offset 
+                if params[13] < bounds[13][0] or params[13] > bounds[13][1]: #y-offset 
                     return -np.inf
-                if params[14] <= 0.0 or params[14] > 1.0: #core scaling
+                if params[14] <= bounds[14][0] or params[14] > bounds[14][1]: #core scaling
                     return -np.inf
-                if params[11] < -10.0 or params[11] > 10.0: #line center
+                if params[11] < bounds[11][0] or params[11] > bounds[11][1]: #line center
                     return -np.inf
-                if params[10] < 0.0 or params[10] > 1.0: 
+                if params[10] < bounds[10][0] or params[10] > bounds[10][1]: 
                     return -np.inf
             
             if linetype=='core':
-                if params[15] < 35.0 or params[15] > 60.0: #gauss std
+                if params[15] < bounds[15][0] or params[15] > bounds[15][1]: #gauss std
                     return -np.inf
-                if params[16] < 10.0 or params[16] > 50.0: #gauss scale factor
+                if params[16] < bounds[16][0] or params[16] > bounds[16][1]: #gauss scale factor
                     return -np.inf
                 
                 if symmetric==False:
-                    if params[17] < -20.0 or params[17] > 20.0: #gauss mean
+                    if params[17] < bounds[17][0] or params[17] > bounds[17][1]: #gauss mean
                         return -np.inf
 
             # visini, period, b, rp/rstar, a/rstar, T0
             g_inds = [0, 1, 3, 4, 7, 12]
-            means = [23.0, 8.24958, 0.200060, 0.039208, 13.19, 58846.097156]
-            stds = [1.0, 1e-5, 0.05, 1e-5, 0.01, 1e-5]
+
+            means = [ bounds[0][0], bounds[1][0], bounds[3][0], 
+                      bounds[4][0], bounds[7][0], bounds[12][0] ]
+#            stds = [1.0, 1e-5, 0.05, 1e-5, 0.01, 1e-5]
+            stds = [ bounds[0][1], bounds[1][1], bounds[3][1],
+                     bounds[4][1], bounds[7][1], bounds[12][1] ]
             tracker = 0
             
             for i, g in enumerate(g_inds):
