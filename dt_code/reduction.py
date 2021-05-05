@@ -29,7 +29,7 @@ class SpectraReduction(object):
 
     def __init__(self, fn_dir, ref_file, 
                  observatory='keck', instrument='graces',
-                 reload=False):
+                 reload_raw=False, reload_reduced=False):
         """
 
         Parameters
@@ -40,7 +40,11 @@ class SpectraReduction(object):
            Reference FITS file for grabbing some header information.
         observatory : str
         instrument : str
-        reload : bool, optional
+        reload_raw : bool, optional
+           Reloads raw 2D CCD images already saved in .npy files.
+           Default is False.
+        reload_reduced : bool, optional
+           Reloads reduced spectra. Default is False
 
         Attributes
         ----------
@@ -64,7 +68,22 @@ class SpectraReduction(object):
         self.interp_orders = None
         self.interp_errors = None
 
-        if reload == False:
+        if reload_reduced == True:
+            self.reload_spectra()
+            self.reload_misc()
+            self.science_frames=None
+            self.npy_files=None
+            self.med_flat=None
+            self.med_dark=None
+
+        elif reload_raw == True:
+            self.npy_files = np.sort([os.path.join(self.fn_dir, i) for i in
+                                      os.listdir(self.fn_dir) if i.endswith('.npy')])
+            self.reload_master_frames()
+            self.reload_misc()
+            self.science_frames = self.load_science_frames()
+
+        else:
             self.resave()
             self.npy_files = np.sort([os.path.join(fn_dir, i) for i in 
                                       os.listdir(fn_dir) if i.endswith('.npy')])
@@ -77,18 +96,8 @@ class SpectraReduction(object):
                                                               i.endswith('_FLAT.npy')]))
             np.save(os.path.join(self.fn_dir, 'master_flat.npy'), self.med_flat)
 
-            self.times = Time(np.load(os.path.join(self.fn_dir, 'times.npy'), 
-                                      allow_pickle=True))
-            self.exptimes = np.load(os.path.join(self.fn_dir, 'exptimes.npy'),
-                                    allow_pickle=True)
-
-        else:
-            self.npy_files = np.sort([os.path.join(self.fn_dir, i) for i in
-                                      os.listdir(self.fn_dir) if i.endswith('.npy')])
-
-            self.reload_master_frames() 
-
-        self.science_frames = self.load_science_frames()
+            self.reload_misc()
+            self.science_frames = self.load_science_frames()
 
 
     def resave(self):
@@ -148,6 +157,13 @@ class SpectraReduction(object):
         else:
             return("No FITS files found in this directory.")
         
+        
+    def reload_misc(self):
+        """ Reloads miscellaneous other files. """
+        self.times = Time(np.load(os.path.join(self.fn_dir, 'times.npy'), allow_pickle=True))
+        self.exptimes = np.load(os.path.join(self.fn_dir, 'exptimes.npy'), allow_pickle=True)
+        self.barycorr = np.load(os.path.join(self.fn_dir, 'barycorr.npy'), allow_pickle=True)
+        self.barycorr = self.barycorr * units.km / units.s
 
     def reload_master_frames(self):
         """
@@ -155,13 +171,9 @@ class SpectraReduction(object):
 
         Attributes
         ----------
-        times : np.ndarray
         med_dark : np.ndarray
         med_flat : np.ndarray
         """
-
-        self.times = Time(np.load(os.path.join(self.fn_dir, 'times.npy'),
-                                  allow_pickle=True))
         self.med_dark = np.load(os.path.join(self.fn_dir,
                                              'master_dark.npy'),
                                 allow_pickle=True)
@@ -256,6 +268,7 @@ class SpectraReduction(object):
                                                             obstime=self.times[i],
                                                             location=self.geodetic).to(units.km/units.s).value
         self.barycorr = barycorr * units.km / units.s
+        np.save(os.path.join(self.fn_dir, 'barycorr.npy'), self.barycorr.value)
         return
 
 
@@ -526,4 +539,48 @@ class SpectraReduction(object):
             if self.interp_errors is not None:
                 np.save(os.path.join(fn_dir, 'interpolated_errors.npy'),
                         self.interp_errors)
+        return
             
+    def reload_spectra(self):
+        """
+        Reloads already saved 1D spectra.
+        """
+        fn_dir = self.fn_dir
+
+        self.wavelengths = np.load(os.path.join(fn_dir, 'raw_wavelengths.npy'), allow_pickle=True)
+        self.spectra = np.load(os.path.join(fn_dir, 'raw_spectra.npy'), allow_pickle=True)
+        
+        self.corrected_wavelengths = np.load(os.path.join(fn_dir, 'corrected_wavelengths.npy'),
+                                             allow_pickle=True)
+        self.corrected_spectra = np.load(os.path.join(fn_dir, 'corrected_spectra.npy'),
+                                             allow_pickle=True)
+        self.orders = np.load(os.path.join(fn_dir, 'corrected_orders.npy'), allow_pickle=True)
+
+        try:
+            self.errors = np.load(os.path.join(fn_dir, 'corrected_errors.npy'), allow_pickle=True)
+        except:
+            print('No error file found.')
+            self.errors = None
+
+        
+        try:
+            self.interp_wavelengths = np.load(os.path.join(fn_dir, 'interpolated_wavelengths.npy'),
+                                              allow_pickle=True)
+            self.interp_spectra = np.load(os.path.join(fn_dir, 'interpolated_spectra.npy'),
+                                          allow_pickle=True)
+            self.interp_orders = np.load(os.path.join(fn_dir, 'interpolated_orders.npy'),
+                                         allow_pickle=True)
+        except:
+            print('No interpolated spectra files found.')
+            self.interp_wavelengths=None
+            self.interp_spectra=None
+            self.interp_orders=None
+
+        try:
+            self.interp_errors = np.load(os.path.join(fn_dir, 'interpolated_errors.npy'),
+                                         allow_pickle=True)
+        except:
+            print('No interpolated error file found.')
+            self.interp_errors=None
+
+        return
