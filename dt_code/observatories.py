@@ -20,10 +20,10 @@ class Observatories(object):
 
 
     def get_keck(self):
-        self.lat = 19.8283 * u.deg
-        self.lon = -155.4783 * u.deg
-        self.height = 4160 * u.m
+        self.tel_lat = 19.8283 * u.deg
+        self.tel_lon = -155.4783 * u.deg
+        self.tel_height = 4160 * u.m
 
-        self.geodetic = EarthLocation.from_geodetic(lat=self.lat,
-                                                    lon=self.lon,
-                                                    height=self.height)
+        self.geodetic = EarthLocation.from_geodetic(lat=self.tel_lat,
+                                                    lon=self.tel_lon,
+                                                    height=self.tel_height)

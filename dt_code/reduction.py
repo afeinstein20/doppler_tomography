@@ -50,10 +50,18 @@ class SpectraReduction(object):
         """
 
         self.fn_dir = fn_dir
-        self.instrument = self.pipeline_reference(instrument, ref_file)
+
+        self.instrument = instrument
+        self.observatory = observatory
+
+        self.instrument_specifics(instrument, ref_file)
+        self.observatory_specifics(observatory)
 
         if reload == False:
-            self.resave(self.dattype_key, self.time_key, self.time_fmt)
+            self.resave()
+            self.npy_files = np.sort([os.path.join(fn_dir, i) for i in 
+                                      os.listdir(fn_dir) if i.endswith('.npy')])
+
             self.med_dark = self.create_master_files(np.sort([i for i in self.npy_files if
                                                               i.endswith('_BIAS.npy')]))
             np.save(os.path.join(self.fn_dir, 'master_dark.npy'), self.med_dark)
@@ -61,6 +69,11 @@ class SpectraReduction(object):
             self.med_flat = self.create_master_files(np.sort([i for i in self.npy_files if
                                                               i.endswith('_FLAT.npy')]))
             np.save(os.path.join(self.fn_dir, 'master_flat.npy'), self.med_flat)
+
+            self.times = Time(np.load(os.path.join(self.fn_dir, 'times.npy'), 
+                                      allow_pickle=True))
+            self.exptimes = np.load(os.path.join(self.fn_dir, 'exptimes.npy'),
+                                    allow_pickle=True)
 
         else:
             self.npy_files = np.sort([os.path.join(self.fn_dir, i) for i in
@@ -108,10 +121,12 @@ class SpectraReduction(object):
                     exptimes = np.append(exptimes, hdu[0].header[self.exptime_key])
 
                     ## Removes cosmic rays
-                    ccd = CCDData(hdu[0].data, unit='electron')
-                    ccd_removed = ccdp.cosmicray_lacosmic(ccd,
-                                                          sigclip=3.0)
-                    np.save(newname, ccd_removed.data+0.0)
+                    #ccd = CCDData(hdu[0].data, unit='electron')
+                    #ccd_removed = ccdp.cosmicray_lacosmic(ccd,
+                    #                                      sigclip=1.0,
+                    #                                      sigfrac=0.1)
+                    #np.save(newname, ccd_removed.data+0.0)
+                    np.save(newname, hdu[0].data)
 
                 else:
                     np.save(newname, hdu[0].data)
@@ -119,6 +134,7 @@ class SpectraReduction(object):
             self.times = Time(times, format=self.time_fmt)
             self.exptimes = exptimes
             np.save(os.path.join(self.fn_dir, 'times.npy'), self.times)
+            np.save(os.path.join(self.fn_dir, 'exptimes.npy'), self.exptimes)
 
             self.npy_files = npy_files
             return
@@ -136,13 +152,15 @@ class SpectraReduction(object):
         med_dark : np.ndarray
         med_flat : np.ndarray
         """
-        
-        self.times = Time(np.load(os.path.join(self.fn_dir, 'jd_times.npy')),
-                          format='jd')
+
+        self.times = Time(np.load(os.path.join(self.fn_dir, 'times.npy'),
+                                  allow_pickle=True))
         self.med_dark = np.load(os.path.join(self.fn_dir,
-                                             'master_dark.npy'))
+                                             'master_dark.npy'),
+                                allow_pickle=True)
         self.med_flat = np.load(os.path.join(self.fn_dir,
-                                             'master_flat.npy'))
+                                             'master_flat.npy'),
+                                allow_pickle=True)
         return
 
     def create_master_files(self, files):
@@ -197,7 +215,7 @@ class SpectraReduction(object):
         return science_frames
 
 
-    def barycentric_correction(self, target, observatory='keck'):
+    def barycentric_correction(self, target):#, observatory='keck'):
         """
         Calculates barycentric correction
 
@@ -215,9 +233,7 @@ class SpectraReduction(object):
         barycorr : np.ndarray
            Barycentric corrections per observation time for a given 
            observatory. Correction given in units of km / s.
-        """
-        obs = Observatories(observatory)
-        
+        """        
         results = Simbad.query_object(target)
         self.ra = results['RA'][0]
         self.dec = results['DEC'][0]
@@ -231,12 +247,12 @@ class SpectraReduction(object):
         for i in range(len(self.times)):
             barycorr[i] = coords.radial_velocity_correction('heliocentric',
                                                             obstime=self.times[i],
-                                                            location=obs.geodetic).to(units.km/units.s).value
+                                                            location=self.geodetic).to(units.km/units.s).value
         self.barycorr = barycorr * units.km / units.s
         return
 
 
-    def pipeline_reference(self, instrument, ref_file):
+    def instrument_specifics(self, instrument, ref_file):
         """
         Uses wavelength and order solution provided
         by an instrument's analysis pipeline.
@@ -266,6 +282,30 @@ class SpectraReduction(object):
             setattr(self, key, getattr(inst, key))
         return
 
+
+    def observatory_specifics(self, observatory):
+        """
+        Gets attributes specific to the observatory.
+        Used for barycentric correction of the wavelengths.
+
+        Attributes
+        ----------
+        tel_lat : float
+           Latitude location of the telescope.
+        tel_lon : float
+           Longitude location of the telescope.
+        tel_height : float
+           Height of the telescoope.
+        geodectic : astropy.EarthLocation
+           Earth Location of the telescope.
+        """
+        obs = Observatories(observatory)
+         
+        keys = list(obs.__dict__.keys())
+        for key in keys:
+            setattr(self, key, getattr(obs, key))
+        return
+
     
     def extract_data(self, cutends=350, percentile=95, size=150, deg=8,
                      interpolate=True, interp_factor=3):
@@ -289,15 +329,17 @@ class SpectraReduction(object):
            Blaze corrected spectra.
         orders : np.ndarray
         """
-        c = 2.998 * units.m / units.s # speed of light
+        c = 2.998 * 10**8 * units.m / units.s # speed of light
 
         fluxes = np.zeros((len(self.times),
                            self.discrete_model.shape[0]-1,
                            self.discrete_model.shape[1]))
 
         for i in tqdm(range(len(self.times))):
+
             dopshift = ((self.wavelength_ref * self.barycorr[i]) / c).to(units.nm)
             wavelength = (self.wavelength_ref - dopshift).to(units.nm).value
+
             data = self.science_frames[i] + 0.0
 
             for j in range(self.discrete_model.shape[0]-1):
