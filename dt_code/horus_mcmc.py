@@ -11,6 +11,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from .horus import *
+from .utils import *
 
 __all__ = ['LineProfileMCMC']
 
@@ -74,7 +75,7 @@ class LineProfileMCMC(object):
             self.velocities = velocities
 
         if transit_phase is None:
-            self.transit_phase = self.create_phases(planet_parameters)
+            self.transit_phase = create_phases(self.times, planet_parameters)
 
         self.pickle_input = self.build_pickle()
         
@@ -91,36 +92,6 @@ class LineProfileMCMC(object):
             self.velocities = rv_m_s.to(units.km/units.s)
 
 
-        def create_phases(self, vals):
-            """
-            Creates a transit light curve over the input times. Used to back-out
-            the transit phases for the given observations.
-            """
-            import batman
-
-            params = batman.TransitParams()   #object to store transit parameters
-            params.t0 = vals[0]               #time of inferior conjunction
-            params.per = vals[1]              #orbital period
-            params.rp = vals[2]               #planet radius (in units of stellar radii)
-            params.a = vals[3]                #semi-major axis (in units of stellar radii)
-            params.inc = vals[4]              #orbital inclination (in degrees)
-            params.ecc = vals[5]              #eccentricity
-            params.w = vals[6]                #longitude of periastron (in degrees)
-            params.limb_dark = "quadratic"    #limb darkening model
-            params.u = [vals[7], vals[8]]     #limb darkening coefficients [u1, u2, u3, u4]
-            
-            m = batman.TransitModel(params, self.times)    #initializes model
-            lc = m.light_curve(params)
-
-            tphase = np.zeros(len(lc))
-            tphase[lc==1.0] = np.nan
-            
-            args = np.where(np.isnan(tphase)==False)[0]
-            tphase[args] = np.linspace(0.0, 1.0, len(args))
-            self.transit_phase = tphase
-            return
-            
-            
         def build_pickle(self, mask): 
             """
             Build the data dictionary needed for horus.py.

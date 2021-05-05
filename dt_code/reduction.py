@@ -9,6 +9,7 @@ from astropy.time import Time
 from astropy.table import Table
 from astropy.nddata import CCDData
 from astroquery.simbad import Simbad
+from scipy.interpolate import interp1d
 from astropy.coordinates import SkyCoord
 from scipy.ndimage.filters import percentile_filter
 
@@ -56,6 +57,12 @@ class SpectraReduction(object):
 
         self.instrument_specifics(instrument, ref_file)
         self.observatory_specifics(observatory)
+
+        self.errors = None
+        self.interp_wavelengths = None
+        self.interp_spectra = None
+        self.interp_orders = None
+        self.interp_errors = None
 
         if reload == False:
             self.resave()
@@ -306,9 +313,34 @@ class SpectraReduction(object):
             setattr(self, key, getattr(obs, key))
         return
 
+    def grid_wavelength(self, wavelength, spectra, length):
+        """
+        Interpolates wavelength and spectra onto a finer grid.
+
+        Returns
+        -------
+        wavelength : np.ndarray
+        spectra : np.ndarray
+        """
+        interp_waves = np.zeros(length)
+        interp_spect = np.zeros(length)
+        
+        start = wavelength[0] + 0.0
+        end = wavelength[-1] + 0.0
+        
+        redstart = np.nanmax(start)
+        blueend  = np.nanmin(end)
+        
+        finer_wavelength = np.logspace(log10(redstart), log10(blueend),
+                                       length, base=10.0)
+        
+        f = interp1d(wavelength, spectra)
+        
+        return finer_wavelength, f(finer_wavelength)
+
     
     def extract_data(self, cutends=350, percentile=95, size=150, deg=8,
-                     interpolate=True, interp_factor=3):
+                     interpolate=True, interp_factor=3, err_dir=None):
         """
         Extracts the spectra per order in each file. 
 
@@ -344,7 +376,7 @@ class SpectraReduction(object):
 
             for j in range(self.discrete_model.shape[0]-1):
                 order = self.order_start + j
-                
+
                 top = self.discrete_model[j] + 0
                 avg_height = np.nanmedian(np.abs(self.discrete_model[j+1] -
                                                  self.discrete_model[j]))
@@ -360,13 +392,13 @@ class SpectraReduction(object):
                     orders = np.zeros((len(self.times),
                                        self.discrete_model.shape[0]-1,
                                        len(fluxes[i][j])-2*cutends))
+
                     corrected_wavelengths = np.zeros((len(self.times),
                                                self.discrete_model.shape[0]-1,
                                                len(fluxes[i][j])-2*cutends))
                     corrected_flux = np.zeros((len(self.times),
                                                self.discrete_model.shape[0]-1,
                                                len(fluxes[i][j])-2*cutends))
-                    
 
                 # Interpolating wavelengths
                 wave = self.wavelength_ref[self.orders_ref==order].value
@@ -386,17 +418,25 @@ class SpectraReduction(object):
                 corrected_wavelengths[i][j] = newwaves[cutends:-cutends]
                 orders[i][j] = np.full(len(newwaves[cutends:-cutends]), order)
 
-        if interpolate:
-            interp_waves = np.zeros( (wavelengths.shape[0],
-                                      wavelengths.shape[1],
-                                      wavelengths.shape[2]*interp_factor) )
-            interp_spect = np.zeros( (wavelengths.shape[0],
-                                      wavelengths.shape[1],
-                                      wavelengths.shape[2]*interp_factor) )
-            interp_ordrs = np.zeros( (wavelengths.shape[0],
-                                      wavelengths.shape[1],
-                                      wavelengths.shape[2]*interp_factor) )
+                if interpolate:
+                    if i == 0 and j == 0:
+                        interp_waves = np.zeros( (corrected_wavelengths.shape[0], 
+                                                  corrected_wavelengths.shape[1],
+                                                  corrected_wavelengths.shape[2]*interp_factor) )
+                        interp_spect = np.zeros( interp_waves.shape )
+                        interp_ordrs = np.zeros( interp_waves.shape )
 
+                    iw, iss = self.grid_wavelength(corrected_wavelengths[i][j],
+                                                   corrected_flux[i][j],
+                                                   interp_spect.shape[2])
+                    interp_waves[i][j] = iw
+                    interp_spect[i][j] = iss
+                    interp_ordrs[i][j] = np.full(interp_spect.shape[2], order)
+
+        if interpolate:
+            self.interp_wavelengths = interp_waves + 0.0
+            self.interp_spectra = interp_spect + 0.0
+            self.interp_orders = interp_ordrs + 0.0
             
         self.wavelengths = wavelengths + 0.0
         self.spectra = fluxes + 0.0
@@ -404,3 +444,86 @@ class SpectraReduction(object):
         self.corrected_wavelengths = corrected_wavelengths + 0.0
         self.orders = orders + 0
 
+        if err_dir is not None:
+            self.error_extraction(err_dir, cutends, interpolate)
+        
+
+    def error_extraction(self, directory, cutends, interpolate):
+        """
+        Gets associated errors from previously reduced data
+
+        Attributes
+        ----------
+        corrected_errors : np.ndarray
+        """
+        files = np.sort([os.path.join(directory, i) for i in os.listdir(directory)])
+
+        err = np.zeros(self.corrected_spectra.shape)
+        if interpolate:
+            interp_err = np.zeros(self.interp_wavelengths.shape)
+
+
+        for i in range(len(files)):
+            hdu = fits.open(files[i])
+            
+            for j in range(self.corrected_spectra.shape[1]):
+                order = self.order_start + j
+                q = np.where( (hdu[0].data[0] == order) &
+                              (hdu[0].data[4] >= self.corrected_wavelengths[i][j][0]-0.1) &
+                              (hdu[0].data[4] <= self.corrected_wavelengths[i][j][-1]+0.1) )[0]
+                
+                f = interp1d(hdu[0].data[4][q], np.sqrt(hdu[0].data[11][q]))
+                err[i][j] = f(self.corrected_wavelengths[i][j])
+
+                if interpolate:
+                    interp_err[i][j] = f(self.interp_wavelengths[i][j])
+                              
+            hdu.close()
+
+        self.errors = err + 0.0
+        if interpolate:
+            self.interp_errors = interp_err + 0.0
+
+
+    def save_spectra(self, fn_dir=None):
+        """
+        Exports spectra as .npy files.
+
+        Parameters
+        ----------
+        fn_dir : str, optional
+           Directory where to save the reduced files to.
+           Default is the initialized fn_dir.
+        """
+        if fn_dir is None:
+            fn_dir = self.fn_dir
+
+        np.save(os.path.join(fn_dir, 'raw_wavelengths.npy'),
+                self.wavelengths)
+        np.save(os.path.join(fn_dir, 'raw_spectra.npy'),
+                self.spectra)
+
+        np.save(os.path.join(fn_dir, 'corrected_wavelengths.npy'),
+                self.corrected_wavelengths)
+        np.save(os.path.join(fn_dir, 'corrected_spectra.npy'),
+                self.corrected_spectra)
+        np.save(os.path.join(fn_dir, 'corrected_orders.npy'),
+                self.orders)
+
+        if self.errors is not None:
+            np.save(os.path.join(fn_dir, 'corrected_errors.npy'),
+                    self.errors)
+
+        if self.interp_wavelengths is not None:
+            
+            np.save(os.path.join(fn_dir, 'interpolated_wavelengths.npy'),
+                    self.interp_wavelengths)
+            np.save(os.path.join(fn_dir, 'interpolated_spectra.npy'),
+                    self.interp_spectra)
+            np.save(os.path.join(fn_dir, 'interpolated_orders.npy'),
+                    self.interp_orders)
+
+            if self.interp_errors is not None:
+                np.save(os.path.join(fn_dir, 'interpolated_errors.npy'),
+                        self.interp_errors)
+            
