@@ -121,12 +121,12 @@ class SpectraReduction(object):
                     exptimes = np.append(exptimes, hdu[0].header[self.exptime_key])
 
                     ## Removes cosmic rays
-                    #ccd = CCDData(hdu[0].data, unit='electron')
-                    #ccd_removed = ccdp.cosmicray_lacosmic(ccd,
-                    #                                      sigclip=1.0,
-                    #                                      sigfrac=0.1)
-                    #np.save(newname, ccd_removed.data+0.0)
-                    np.save(newname, hdu[0].data)
+                    ccd = CCDData(hdu[0].data, unit='electron')
+                    ccd_removed = ccdp.cosmicray_lacosmic(ccd,
+                                                          sigclip=6.5,
+                                                          sigfrac=0.3)
+                    np.save(newname, ccd_removed.data+0.0)
+                    #np.save(newname, hdu[0].data)
 
                 else:
                     np.save(newname, hdu[0].data)
