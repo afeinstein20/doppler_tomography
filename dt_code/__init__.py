@@ -5,5 +5,6 @@ from .version import __version__
 from .observatories import *
 from .instruments import *
 from .reduction import *
+from .analysis import *
 #from .horus_mcmc import *
 #from .horus import *
