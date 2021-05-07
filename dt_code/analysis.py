@@ -22,11 +22,44 @@ class DTAnalysis(object):
         error : np.ndarray
         obstime : np.ndarray
         """
-        self.wavelengths = wavelength
+        self.wavelengths = wavelengths
         self.spectra = spectra
         self.errors = errors
         self.orders = orders
         self.obstimes = obstimes
+        
+        self.phase = None
+
+    def get_order_index(self, lam):
+        """
+        Loops over the wavelengths array and finds which index
+        a given wavelength is located in.
+
+        Parameters
+        ----------
+        lam : float
+           The wavelength in question.
+        
+        Returns
+        -------
+        i : int
+           The order index.
+        """ 
+        where = []
+        centers = []
+        for i in range(len(self.wavelengths[0])):
+            diff = np.abs(self.wavelengths[0][i] - lam)
+            if len(np.where(diff <= 1.0)[0]) > 0:
+                where.append(i)
+                c = np.where(self.wavelengths[0][i] <= lam)[0][-1]
+                centers.append(np.abs(len(self.wavelengths[0][i])/2 - c))
+
+        if len(where) > 1:
+            return where[np.argmin(centers)]
+        elif len(where) == 1:
+            return where[0]
+        else:
+            return('Wavelength not in these observations.')
 
 
     def expanding_bins(self, lines, repeat=3, subtract=True, template=None):
@@ -134,3 +167,157 @@ class DTAnalysis(object):
             normalized[i] = norm_around_zero/np.abs(area)
             
         return normalized
+
+
+    def transit_phases(self, params, ret=False):
+        """
+        Creates an array of transit phases based on the time of 
+        observations and the batman transit modeling code.
+        
+        Parameters
+        ----------
+        params : np.ndarray
+           T0, period, rp/rstar, a/rstar, i, e, omega, u1, u2.
+           T0 must be given in JD.
+        ret : bool, optional
+           Returns the phase and light curve instead of setting
+           attributes. Default is False.
+        
+        Attributes
+        ----------
+        phase : np.ndarray
+           Transit phases.
+        lc : np.ndarray
+           Transit light curve.
+        """
+        phase, lc = create_phases(self.obstimes.jd, params)
+
+        if ret == True:
+            return phase, lc
+        else:
+            self.phase = phase
+            self.lc = lc
+        
+
+    def create_template(self, temptype, ind):
+        """ 
+        Creates a template to subtract from the spectra. 
+        temptype options = 'med' or 'oot' (out-of-transit).
+        """
+        if temptype == 'med':
+            template = np.nanmedian(self.spectra[:,ind], axis=0)
+        elif temptype == 'oot':
+            if self.phase is None:
+                return('Must call DTAnalysis.transit_phases() first.')
+            else:
+                oot = np.where(np.isnan(self.phase)==True)[0]
+                template = np.nanmedian(self.spectra[oot,ind], axis=0)
+        else:
+            return('temptype keyword unknown.')
+
+        return template
+
+    def line_mask(self, reg):
+        """
+        Gets information on what order the wavelength is in.
+        Returns : ind, mask
+        """
+        ind1 = self.get_order_index(reg[0])
+        ind2 = self.get_order_index(reg[1])
+
+        if ind1 == ind2:
+            ind = ind1
+        else:
+            return('Line region spans two orders.')
+
+        q = ( (self.wavelengths[0][ind] >= reg[0]) &
+              (self.wavelengths[0][ind] <= reg[-1]) )
+
+        return ind, q
+
+    def measure_excess(self, reg, temptype='med', mask=False, sig=2.5):
+        """
+        Calculates excess absorption in a given line.
+        
+        Parameters
+        ----------
+        reg : np.ndarray
+           2D array of lower and upper wavelengths to
+           calculate excess over.
+        temptype : str, optional
+           The template to subtract from. Default is a median
+           across all observations. The other option is 'oot'
+           which is an out-of-transit median template.
+        mask : bool, optional
+           Can mask outlier points. Default is False.
+        sig : float, optional
+           Sigma outliers to mask if mask is True. Default is 2.5.
+
+        Returns
+        -------
+        excess : np.ndarray
+           Array of excess values.
+        """
+        ind1 = self.get_order_index(reg[0])
+        ind2 = self.get_order_index(reg[1])
+
+        ind, q = self.line_mask(reg)
+
+        # Creates template
+        template = self.create_template(temptype, ind)
+        template = template[q] + 0.0 
+        
+        # Applies mask if mask==True
+        if mask == True:
+            widths = np.zeros(len(self.obstimes))
+            divout = self.spectra[:,ind,q] / template
+
+            for i in range(len(self.obstimes)):
+                mask = np.where( divout[i] < np.nanmedian(divout[i]) + sig*np.nanstd(divout[i]) )[0]
+                widths[i] = np.nansum( (self.spectra[i,ind,q][mask]/template[mask]) - 1 ) * -1.0
+            
+        else:
+            print(q)
+            widths = np.nansum( (self.spectra[:,ind,q]/template - 1), axis=1 ) * -1.0
+            
+        return widths
+        
+        
+    def weighted_means(self, reg):
+        """
+        Calculates weighted means for given lines.
+
+        Parameters
+        ----------
+        reg : np.ndarray
+           2 x n array of beginning and ending wavelength
+           regions to sum up.
+        
+        Returns
+        -------
+        lc : np.ndarray
+           Weighted mean light curve.
+        err : np.ndarray
+           Errors on the light curve.
+        """
+        n, d, e = 0.0, 0.0, 0.0
+
+        reg = np.array(reg)
+
+        if len(reg.shape) == 1:
+            reg = np.reshape(reg, (1,2))
+
+        for i in range(reg.shape[0]):
+            ind, q = self.line_mask(reg[i])
+            
+            if i == 0:
+                n = np.zeros((len(reg), len(np.where(q==True)[0]) ))
+
+            n += np.nansum( self.spectra[:,ind,q] / self.errors[:,ind,q]**2 , axis=1)
+            d += np.nansum( 1.0 / self.errors[:,ind,q]**2, axis=1)
+            e += np.nansum( self.errors[:,ind,q]**-2, axis=1)
+
+        e = np.sqrt(1.0/e)
+        f = n/d
+
+        return f, e

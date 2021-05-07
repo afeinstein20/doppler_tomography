@@ -27,7 +27,7 @@ class SpectraReduction(object):
     telescope + instrument setups.
     """
 
-    def __init__(self, fn_dir, ref_file, 
+    def __init__(self, fn_dir, ref_file, remove_cr=True,
                  observatory='keck', instrument='graces',
                  reload_raw=False, reload_reduced=False):
         """
@@ -84,7 +84,7 @@ class SpectraReduction(object):
             self.science_frames = self.load_science_frames()
 
         else:
-            self.resave()
+            self.resave(remove_cr)
             self.npy_files = np.sort([os.path.join(fn_dir, i) for i in 
                                       os.listdir(fn_dir) if i.endswith('.npy')])
 
@@ -100,7 +100,7 @@ class SpectraReduction(object):
             self.science_frames = self.load_science_frames()
 
 
-    def resave(self):
+    def resave(self, remove_cr):
         """
         Resaves FITS files into .npy files
         and extracts observation times. Cosmic rays are
@@ -137,11 +137,14 @@ class SpectraReduction(object):
                     exptimes = np.append(exptimes, hdu[0].header[self.exptime_key])
 
                     ## Removes cosmic rays
-                    ccd = CCDData(hdu[0].data, unit='electron')
-                    ccd_removed = ccdp.cosmicray_lacosmic(ccd,
-                                                          sigclip=6.5,
-                                                          sigfrac=0.3)
-                    np.save(newname, ccd_removed.data+0.0)
+                    if remove_cr == True:
+                        ccd = CCDData(hdu[0].data, unit='electron')
+                        ccd_removed = ccdp.cosmicray_lacosmic(ccd,
+                                                              sigclip=6.5,
+                                                              sigfrac=0.3)
+                        np.save(newname, ccd_removed.data+0.0)
+                    else:
+                        np.save(newname, hdu[0].data)
                     #np.save(newname, hdu[0].data)
 
                 else:
@@ -228,7 +231,6 @@ class SpectraReduction(object):
                 science_frames = np.zeros((len(subfiles),
                                            dat.shape[0],
                                            dat.shape[1]))
-
             science_frames[i] = (dat - self.med_dark) / self.med_flat
 
         return science_frames
@@ -424,6 +426,7 @@ class SpectraReduction(object):
                                          size=size)
                 fit = np.polyfit(newwaves[cutends:-cutends], filt, deg=deg)
                 model = np.poly1d(fit)
+                
 
                 corrected_flux[i][j] = (fluxes[i][j][cutends:-cutends] / 
                                         model(newwaves[cutends:-cutends]))

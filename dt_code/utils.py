@@ -29,7 +29,7 @@ def create_phases(time, vals):
     
     args = np.where(np.isnan(tphase)==False)[0]
     tphase[args] = np.linspace(0.0, 1.0, len(args))
-    return tphase
+    return tphase, lc
 
 
 def hex_to_rgb(h):
