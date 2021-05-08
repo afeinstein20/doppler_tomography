@@ -140,8 +140,10 @@ class SpectraReduction(object):
                     if remove_cr == True:
                         ccd = CCDData(hdu[0].data, unit='electron')
                         ccd_removed = ccdp.cosmicray_lacosmic(ccd,
-                                                              sigclip=6.5,
-                                                              sigfrac=0.3)
+                                                              sigclip=10.5,
+                                                              sigfrac=0.5,
+                                                              niter=3,
+                                                              cleantype='median')
                         np.save(newname, ccd_removed.data+0.0)
                     else:
                         np.save(newname, hdu[0].data)

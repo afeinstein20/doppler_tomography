@@ -310,10 +310,7 @@ class DTAnalysis(object):
         for i in range(reg.shape[0]):
             ind, q = self.line_mask(reg[i])
             
-            if i == 0:
-                n = np.zeros((len(reg), len(np.where(q==True)[0]) ))
-
-            n += np.nansum( self.spectra[:,ind,q] / self.errors[:,ind,q]**2 , axis=1)
+            n += np.nansum( (self.spectra[:,ind,q] / self.errors[:,ind,q]**2) , axis=1)
             d += np.nansum( 1.0 / self.errors[:,ind,q]**2, axis=1)
             e += np.nansum( self.errors[:,ind,q]**-2, axis=1)
 
