@@ -2,8 +2,9 @@ import numpy as np
 from astropy import units
 from matplotlib import gridspec
 import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
 
-from .utils import *
+from .utils import create_phases, hex_to_rgb, discrete_cmap
 
 __all__ = ['DTAnalysis']
 
@@ -62,7 +63,48 @@ class DTAnalysis(object):
             return('Wavelength not in these observations.')
 
 
-    def expanding_bins(self, lines, repeat=3, subtract=True, template=None):
+    def plotting_lines(self, reg, colors=None, ax=None, cmap='viridis',
+                       xaxis='velocity'):
+        """
+        Plots lines over a given region.
+        
+        Parameters
+        ----------
+        xaxis : str
+           Plots xaxis in wavelength or velocity
+        """
+        ind1 = self.get_order_index(reg[0])
+        ind2 = self.get_order_index(reg[1])
+
+        ind, q = self.line_mask(reg)
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8,6))
+        
+        if colors is None:
+            colors = discrete_cmap(cmap, len(self.spectra))
+
+        if xaxis == 'velocity':
+            vel,_ = self.to_velocity(self.wavelengths[0][ind][q],
+                                     flux=self.spectra[0][ind][q])
+
+            for i in range(len(self.spectra)):
+                ax.plot(vel,
+                        self.spectra[i][ind][q], c=colors[i])            
+                
+            ax.set_xlabel('Velocity [km s$^{-1}$]')
+
+        else:
+            for i in range(len(self.spectra)):
+                ax.plot(self.wavelengths[i][ind][q],
+                        self.spectra[i][ind][q], c=colors[i])
+            ax.set_xlabel('Wavelength [nm]')
+
+        ax.set_ylabel('Normalized Flux')
+
+    def expanding_bins(self, reg, repeat=3, subtract=True, temptype='oot',
+                       plot=False, ax=None, cmap='viridis', vlim=0.018,
+                       vsini=0):
         """
         Increases bin width for the waterfall plots by a factor of `repeat`.
 
@@ -85,17 +127,60 @@ class DTAnalysis(object):
         template : np.ndarray
            Template subtracted off (if subctract=True).
         """
-        if template is None:
-            template = np.nanmedian(lines, axis=0)
-        binned = np.zeros( (len(self.obstimes)*repeat, len(lines[0]))  )
-            
+        ind1 = self.get_order_index(reg[0])
+        ind2 = self.get_order_index(reg[1])
+
+        ind, q = self.line_mask(reg)
+
+        # Creates template
+        template = self.create_template(temptype, ind)
+        template = template[q] + 0.0
+
+        binned = np.zeros( (len(self.obstimes)*repeat, len(self.spectra[0][ind][q]))  )
+        rphase = np.zeros(len(self.obstimes)*repeat)
         z = 0
-        for i in range(len(lines)):
+        for i in range(len(self.spectra)):
             if subtract == True:
-                binned[z:z+repeat] = lines[i] - template
+                binned[z:z+repeat] = self.spectra[i][ind][q] - template
             else:
-                binned[z:z+repeat] = lines[i]
+                binned[z:z+repeat] = self.spectra[i][ind][q]
+            rphase[z:z+repeat] = self.phase[i]
             z += repeat
+
+        # Plotting code
+        if plot == True:
+            if ax is None:
+                fig, ax = plt.subplots(figsize=(8,5))
+
+            im = ax.imshow(binned, cmap=cmap, vmin=-vlim,
+                           vmax=vlim, origin='lower')
+            cbar = plt.colorbar(im)
+            cbar.set_label('Fractional Deviation')
+            
+            vel,_ = self.to_velocity(self.wavelengths[0][ind][q], 
+                                     flux=self.spectra[0][ind][q])
+            interp = interp1d(vel, np.arange(0,len(vel),1))
+            
+            ax.vlines(interp(-vsini), -10, len(binned)+30, color='k', lw=2.5, 
+                       linestyle='--')
+            ax.vlines(interp(vsini), -10, len(binned)+30, color='k', lw=2.5,
+                             linestyle='--')
+            ax.set_ylim(0, len(binned))
+
+            xticks = [interp(-60), interp(0), interp(60)]
+            ax.set_xticks(xticks)
+            ax.set_xticklabels([-60, 0, 60])
+
+            pinterp = interp1d(rphase, np.arange(0,len(rphase),1))
+            for p in [0, 0.5, 1]:
+                ax.plot(interp(0), pinterp(p), 'w+', ms=8, markeredgewidth=2,
+                        markeredgecolor='w')
+            yticks = np.arange(0,1.2,0.2)
+            ax.set_yticks(pinterp(yticks))
+            ax.set_yticklabels(np.round(yticks,1))
+            
+            ax.set_ylabel('Transit Phase')
+            ax.set_xlabel('Velocity [km s$^{-1}$]')
 
         return binned, template
 
@@ -214,8 +299,8 @@ class DTAnalysis(object):
                 template = np.nanmedian(self.spectra[oot,ind], axis=0)
         else:
             return('temptype keyword unknown.')
-
         return template
+
 
     def line_mask(self, reg):
         """
@@ -271,16 +356,18 @@ class DTAnalysis(object):
         if mask == True:
             widths = np.zeros(len(self.obstimes))
             divout = self.spectra[:,ind,q] / template
+            errors = np.zeros(len(self.obstimes))
 
             for i in range(len(self.obstimes)):
                 mask = np.where( divout[i] < np.nanmedian(divout[i]) + sig*np.nanstd(divout[i]) )[0]
                 widths[i] = np.nansum( (self.spectra[i,ind,q][mask]/template[mask]) - 1 ) * -1.0
-            
+                errors[i] = 1.0 / np.nansum(self.errors[i,ind,q][mask])
+
         else:
-            print(q)
             widths = np.nansum( (self.spectra[:,ind,q]/template - 1), axis=1 ) * -1.0
-            
-        return widths
+            errors = 1.0 / np.nansum( self.errors[:,ind,q]**2, axis=1)
+
+        return widths, errors
         
         
     def weighted_means(self, reg):

@@ -1,6 +1,8 @@
+import matplotlib
 import numpy as np
+from pylab import cm
 
-__all__ = ['create_phases', 'hex_to_rgb']
+__all__ = ['create_phases', 'hex_to_rgb', 'discrete_cmap']
 
 
 def create_phases(time, vals):
@@ -39,3 +41,14 @@ def hex_to_rgb(h):
     hlen = int(len(h))
     rgb = tuple(int(h[i:int(i+hlen/3)], 16) / 255.0 for i in range(0, hlen, int(hlen/3)))
     return rgb
+
+
+def discrete_cmap(colormap, ncolors):
+    colors = []
+    cmap = cm.get_cmap(colormap, ncolors)
+
+    for i in range(cmap.N):
+        rgb = cmap(i)[:3]
+        colors.append(matplotlib.colors.rgb2hex(rgb))
+        
+    return np.array(colors)
